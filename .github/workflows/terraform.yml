@@ -1,0 +1,149 @@
+name: Terraform
+
+on:
+  pull_request:
+    paths:
+      - "live/org/**"
+      - "modules/organization/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - "live/org/**"
+      - "modules/organization/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+defaults:
+  run:
+    working-directory: live/org
+
+env:
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  terraform:
+    name: Plan / Apply
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.4"
+          terraform_wrapper: false
+
+      - name: Write terraform.tfvars
+        env:
+          TF_VARS: ${{ secrets.TF_VARS }}
+        run: |
+          if [ -z "$TF_VARS" ]; then
+            echo "Missing GitHub secret TF_VARS (contents of terraform.tfvars)"
+            exit 1
+          fi
+          printf '%s\n' "$TF_VARS" > terraform.tfvars
+
+      - name: Terraform fmt
+        id: fmt
+        run: terraform fmt -check -recursive
+        working-directory: .
+        continue-on-error: true
+
+      - name: Terraform init
+        id: init
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform plan
+        id: plan
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color -out=tfplan | tee plan.txt
+        continue-on-error: true
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+          FMT_OUTCOME: ${{ steps.fmt.outcome }}
+          INIT_OUTCOME: ${{ steps.init.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const planPath = 'live/org/plan.txt';
+            let plan = '(plan output missing)';
+            if (fs.existsSync(planPath)) {
+              plan = fs.readFileSync(planPath, 'utf8');
+            }
+            const max = 60000;
+            if (plan.length > max) {
+              plan = plan.slice(0, max) + '\n\n… truncated …';
+            }
+            const outcome = process.env.PLAN_OUTCOME || 'unknown';
+            const body = [
+              '### Terraform plan (`live/org`)',
+              '',
+              `Fmt: \`${process.env.FMT_OUTCOME}\` · Init: \`${process.env.INIT_OUTCOME}\` · Validate: \`${process.env.VALIDATE_OUTCOME}\` · Plan: \`${outcome}\``,
+              '',
+              '<details><summary>Show plan</summary>',
+              '',
+              '```text',
+              plan,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const marker = '### Terraform plan (`live/org`)';
+            const existing = comments.find((c) => c.user.type === 'Bot' && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+            if (outcome !== 'success') {
+              core.setFailed('Terraform plan failed');
+            }
+
+      - name: Terraform apply
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
+        run: terraform apply -input=false -auto-approve -no-color
