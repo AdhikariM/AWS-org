@@ -1,0 +1,23 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Local values / secrets
+*.tfvars
+!*.tfvars.example
+*.tfvars.json
+
+# Credentials / OS
+*accessKeys*
+*.pem
+*.csv
+.env
+.env.*
+.DS_Store

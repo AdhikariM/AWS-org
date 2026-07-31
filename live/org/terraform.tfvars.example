@@ -1,0 +1,11 @@
+aws_region          = "us-east-1"
+account_name_prefix = "aj"
+
+# Each email must be globally unique and never used for another AWS account.
+# Plus-addressing works with most mailboxes, e.g. you+aws-tooling@example.com
+account_emails = {
+  tooling = "you+aws-tooling@example.com"
+  dev     = "you+aws-dev@example.com"
+  staging = "you+aws-staging@example.com"
+  prod    = "you+aws-prod@example.com"
+}
