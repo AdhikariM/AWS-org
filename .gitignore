@@ -21,3 +21,4 @@ override.tf.json
 .env
 .env.*
 .DS_Store
+.idea/
